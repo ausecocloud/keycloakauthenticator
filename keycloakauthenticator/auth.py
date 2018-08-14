@@ -91,7 +91,8 @@ class KeyCloakAuthenticator(GenericOAuthenticator):
         # short circuit if we have a token in data:
         # see https://github.com/jupyterhub/jupyterhub/pull/1840
         if data and 'token' in data:
-            return self.get_user_for_token(data['token'])
+            yield self.get_user_for_token(data['token'])
+            return
 
         # trade authorization code for tokens
         code = handler.get_argument("code")
@@ -151,7 +152,7 @@ class KeyCloakAuthenticator(GenericOAuthenticator):
 
         self.log.info('User {} is admin: {}'.format(id_token['name'], self.admin_role in oidc_roles))
 
-        return {
+        yield {
             # TODO: do I want a decoded access token? ... e.g.
             'name': id_token.get(self.username_key),
             'admin': self.admin_role in oidc_roles,
