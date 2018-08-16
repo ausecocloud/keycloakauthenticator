@@ -37,9 +37,9 @@ class KeyCloakAuthenticator(GenericOAuthenticator):
         help="OIDC Issuer. Used to validate tokens."
     )
 
-    jwk = Dict(
+    jwks = Dict(
         config=False,
-        help="JWK keys to validate OIDC tokens (derived from oidc_config)"
+        help="JWKS (key set) to validate OIDC tokens (derived from oidc_config)"
     )
 
     def __init__(self, *args, **kwargs):
@@ -56,7 +56,7 @@ class KeyCloakAuthenticator(GenericOAuthenticator):
     @observe('oidc_config')
     def _oidc_config_changed(self, change):
         # change['new'], ['old']
-        self.oidc_isser = self.oidc_config.get('issuer', '')
+        self.oidc_issuer = self.oidc_config.get('issuer', '')
         self.userdata_url = self.oidc_config.get('userinfo_endpoint', '')
         self.token_url = self.oidc_config.get('token_endpoint', '')
         self.login_handler._OAUTH_AUTHORIZE_URL = self.oidc_config.get('authorization_endpoint', '')
@@ -81,7 +81,7 @@ class KeyCloakAuthenticator(GenericOAuthenticator):
 
     def decode_jwt_token(self, token):
         return jose.jwt.decode(
-            token, self.jwk,
+            token, self.jwks,
             audience=self.client_id,
             issuer=self.oidc_issuer,
             # wo don't have at_hash in id_token, so we can't verify access_token here
@@ -93,15 +93,9 @@ class KeyCloakAuthenticator(GenericOAuthenticator):
         token = self.decode_jwt_token(access_token)
         return token.get(self.username_key, None)
 
-    async def authenticate(self, handler, data=None):
+    @gen.coroutine
+    def authenticate(self, handler, data=None):
         http_client = AsyncHTTPClient()
-        # is config loaded?
-        if not self.oidc_config:
-            resp = await http_client.fetch(self.oidc_config_url)
-            self.oidc_config = json.load(resp.body.decode('utf8', 'replace'))
-            # load jwks as well
-            resp = await http_client.fetch(self.oidc_config['jwks_uri'])
-            self.jwks = json.load(resp.body.decode('utf8', 'replace'))
         # short circuit if we have a token in data:
         # see https://github.com/jupyterhub/jupyterhub/pull/1840
         if data and 'token' in data:
@@ -166,7 +160,7 @@ class KeyCloakAuthenticator(GenericOAuthenticator):
 
         self.log.info('User {} is admin: {}'.format(id_token['name'], self.admin_role in oidc_roles))
 
-        yield {
+        return {
             # TODO: do I want a decoded access token? ... e.g.
             'name': id_token.get(self.username_key),
             'admin': self.admin_role in oidc_roles,
