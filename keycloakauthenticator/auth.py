@@ -1,4 +1,5 @@
 import base64
+import io
 import json
 import os
 import urllib
@@ -41,14 +42,27 @@ class KeyCloakAuthenticator(GenericOAuthenticator):
         help="JWK keys to validate OIDC tokens (derived from oidc_config)"
     )
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        # initial load of oidc config
+        self._load_oidc_config()
+
+    def _load_oidc_config(self):
+        with urllib.request.urlopen(self.oidc_config_url) as resp:
+            self.oidc_config = json.load(
+                io.TextIOWrapper(resp, 'utf-8', 'replace')
+            )
+
     @observe('oidc_config')
     def _oidc_config_changed(self, change):
         # change['new'], ['old']
         self.oidc_isser = self.oidc_config.get('issuer', '')
         self.userdata_url = self.oidc_config.get('userinfo_endpoint', '')
         self.token_url = self.oidc_config.get('token_endpoint', '')
-        self._OAUTH_AUTHORIZE_URL = self.oidc_config.get('authorization_endpoint', '')
-        self._OAUTH_ACCESS_TOKEN_URL = self.oidc_config.get('token_endpoint', '')
+        self.login_handler._OAUTH_AUTHORIZE_URL = self.oidc_config.get('authorization_endpoint', '')
+        self.login_handler._OAUTH_ACCESS_TOKEN_URL = self.oidc_config.get('token_endpoint', '')
+        with urllib.request.urlopen(self.oidc_config['jwks_uri']) as resp:
+            self.jwks = json.load(io.TextIOWrapper(resp, 'utf-8', 'replace'))
 
     @gen.coroutine
     def pre_spawn_start(self, user, spawner):
