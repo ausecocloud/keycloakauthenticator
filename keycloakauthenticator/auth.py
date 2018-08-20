@@ -99,8 +99,7 @@ class KeyCloakAuthenticator(GenericOAuthenticator):
         # short circuit if we have a token in data:
         # see https://github.com/jupyterhub/jupyterhub/pull/1840
         if data and 'token' in data:
-            yield self.get_user_for_token(data['token'])
-            return
+            return self.get_user_for_token(data['token'])
 
         # trade authorization code for tokens
         code = handler.get_argument("code")
