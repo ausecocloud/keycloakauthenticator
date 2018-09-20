@@ -9,7 +9,7 @@ import jose.jwt
 from oauthenticator.generic import GenericOAuthenticator
 from tornado import gen
 from tornado.httpclient import HTTPRequest, AsyncHTTPClient
-from traitlets import Unicode, Dict, observe
+from traitlets import Unicode, Dict, Set, observe
 
 
 class KeyCloakAuthenticator(GenericOAuthenticator):
@@ -18,6 +18,16 @@ class KeyCloakAuthenticator(GenericOAuthenticator):
     admin_role = Unicode(
         config=True,
         help="Keycloak client role to grant admin access."
+    )
+
+    required_roles = Set(
+        Unicode(),
+        set(x.strip()
+            for x in os.environ.get('OIDC_REQUIRED_ROLES', '').split(',')
+            if x.strip()
+            ),
+        config=True,
+        help="Required resource access roles. Any role is sufficient.",
     )
 
     oidc_config_url = Unicode(
@@ -80,17 +90,41 @@ class KeyCloakAuthenticator(GenericOAuthenticator):
         spawner.oauth_user = auth_state.get('oauth_user', {})
 
     def decode_jwt_token(self, token):
-        return jose.jwt.decode(
-            token, self.jwks,
-            audience=self.client_id,
-            issuer=self.oidc_issuer,
-            # wo don't have at_hash in id_token, so we can't verify access_token here
-            # access_token=access_token
+        try:
+            return jose.jwt.decode(
+                token, self.jwks,
+                audience=self.client_id,
+                issuer=self.oidc_issuer,
+                # wo don't have at_hash in id_token, so we can't verify access_token here
+                # access_token=access_token,
+                options={
+                    # verify audience only if we have no required roles
+                    'verify_aud': not self.required_roles,
+                }
+            )
+        except Exception as e:
+            # TODO: log error?
+            return
+
+    def get_roles_from_token(self, token):
+        return set(
+            token.get('resource_access', {}).get(self.client_id, {}).get('roles', [])
         )
+
+    def validate_roles(self, user_roles):
+        return bool(not self.required_roles or (self.required_roles & user_roles))
 
     def get_user_for_token(self, access_token):
         # accepts access_token and returns user name
         token = self.decode_jwt_token(access_token)
+        if not token:
+            return None
+
+        # get user roles from access token
+        user_roles = self.get_roles_from_token(token)
+        if not self.validate_roles(user_roles):
+            return None
+
         return token.get(self.username_key, None)
 
     @gen.coroutine
@@ -99,6 +133,7 @@ class KeyCloakAuthenticator(GenericOAuthenticator):
         # short circuit if we have a token in data:
         # see https://github.com/jupyterhub/jupyterhub/pull/1840
         if data and 'token' in data:
+            # TODO: check roles?
             return self.get_user_for_token(data['token'])
 
         # trade authorization code for tokens
@@ -141,34 +176,47 @@ class KeyCloakAuthenticator(GenericOAuthenticator):
         # extract tokens
         access_token = resp_json['access_token']
         # expires_in: 300 ... access_token
-        refresh_token = resp_json['refresh_token']
+        refresh_token = resp_json.get('refresh_token', None)
         # refresh_expires_in: 1800 ... refresh_token
         id_token = resp_json['id_token']
         scope = (resp_json.get('scope', '')).split(' ')
 
         # verify id_token
         id_token = self.decode_jwt_token(id_token)
-        if not id_token.get(self.username_key):
+        if not (id_token and id_token.get(self.username_key)):
             self.log.error("OAuth user contains no key %s: %s", self.username_key, id_token)
             return
 
         # verify and decode access token
         atok = self.decode_jwt_token(access_token)
-        # get client roles from access token
-        oidc_roles = atok.get('resource_access', {}).get(self.client_id, {}).get('roles', [])
+        if not atok:
+            self.log.error("No Access Token")
+            return
+        # get user roles from access token
+        user_roles = self.get_roles_from_token(atok)
+        user_name = id_token.get('name', id_token.get(self.username_key))
 
-        self.log.info('User {} is admin: {}'.format(id_token['name'], self.admin_role in oidc_roles))
+        is_user = self.validate_roles(user_roles)
+        is_admin = bool(self.admin_role and (self.admin_role in user_roles))
+
+        if not is_user:
+            self.log.error("User %s not allowed", user_name)
+            return
+
+        self.log.info('User {} is admin: {}'.format(user_name, is_admin))
+
+        self.log.info('Token: %s', atok)
 
         return {
             # TODO: do I want a decoded access token? ... e.g.
             'name': id_token.get(self.username_key),
-            'admin': self.admin_role in oidc_roles,
+            'admin': is_admin,
             'auth_state': {
                 'access_token': access_token,
                 'refresh_token': refresh_token,
                 # 'id_token': id_token,
                 'oauth_user': id_token,
-                'oauth_roles': oidc_roles,
+                'oauth_roles': user_roles,
                 'scope': scope,
             }
         }
