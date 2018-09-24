@@ -216,7 +216,7 @@ class KeyCloakAuthenticator(GenericOAuthenticator):
                 'refresh_token': refresh_token,
                 # 'id_token': id_token,
                 'oauth_user': id_token,
-                'oauth_roles': user_roles,
+                'oauth_roles': list(user_roles),
                 'scope': scope,
             }
         }
