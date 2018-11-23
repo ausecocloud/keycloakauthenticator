@@ -1,6 +1,6 @@
 import contextlib
 import json
-from unittest.mock import patch
+from unittest.mock import patch, Mock
 
 from jose import jwt
 import pkg_resources
@@ -167,7 +167,7 @@ def test_keycloak_token(keycloak_client):
         user_model('wash', keycloak_client.oidc_config),
         jwk, algorithm=jwk['alg'],
     )
-    user_name = yield authenticator.authenticate(None, data={'token': token})
+    user_name = yield authenticator.authenticate(Mock(), data={'token': token})
     assert user_name == 'wash'
 
 @mark.gen_test
@@ -179,7 +179,7 @@ def test_keycloak_token_roles(keycloak_client):
         user_model('wash', keycloak_client.oidc_config),
         jwk, algorithm=jwk['alg'],
     )
-    user_name = yield authenticator.authenticate(None, data={'token': token})
+    user_name = yield authenticator.authenticate(Mock(), data={'token': token})
     assert user_name == 'wash'
 
 @mark.gen_test
@@ -190,7 +190,7 @@ def test_keycloak_token_fail(keycloak_client):
         user_model('wash', keycloak_client.oidc_config, audience='other'),
         jwk, algorithm=jwk['alg'],
     )
-    user_name = yield authenticator.authenticate(None, data={'token': token})
+    user_name = yield authenticator.authenticate(Mock(), data={'token': token})
     assert user_name is None
 
 
@@ -203,5 +203,5 @@ def test_keycloak_token_role_fail(keycloak_client):
         user_model('wash', keycloak_client.oidc_config),
         jwk, algorithm=jwk['alg'],
     )
-    user_name = yield authenticator.authenticate(None, data={'token': token})
+    user_name = yield authenticator.authenticate(Mock(), data={'token': token})
     assert user_name is None

@@ -119,13 +119,20 @@ class KeyCloakAuthenticator(GenericOAuthenticator):
         token = self.decode_jwt_token(access_token)
         if not token:
             return None
+        name = token.get(self.username_key, None)
+        if not name:
+            return None
 
+        self.log.info('Token: %s', token)
         # get user roles from access token
         user_roles = self.get_roles_from_token(token)
         if not self.validate_roles(user_roles):
             return None
-
-        return token.get(self.username_key, None)
+        is_admin = bool(self.admin_role and (self.admin_role in user_roles))
+        return {
+            'name': name,
+            'admin': is_admin
+        }
 
     @gen.coroutine
     def authenticate(self, handler, data=None):
@@ -134,7 +141,16 @@ class KeyCloakAuthenticator(GenericOAuthenticator):
         # see https://github.com/jupyterhub/jupyterhub/pull/1840
         if data and 'token' in data:
             # TODO: check roles?
-            return self.get_user_for_token(data['token'])
+            user = self.get_user_for_token(data['token'])
+            if user is None:
+                return None
+            # ensure user exists in db
+            userob = handler.user_from_username(user['name'])
+            if userob is None:
+                return None
+            # This code path should only be reachable from UserTokenListAPIHandler
+            # which currently only wants a username as return value
+            return user['name']
 
         # trade authorization code for tokens
         code = handler.get_argument("code")
@@ -188,35 +204,33 @@ class KeyCloakAuthenticator(GenericOAuthenticator):
             return
 
         # verify and decode access token
-        atok = self.decode_jwt_token(access_token)
-        if not atok:
-            self.log.error("No Access Token")
-            return
-        # get user roles from access token
-        user_roles = self.get_roles_from_token(atok)
-        user_name = id_token.get('name', id_token.get(self.username_key))
+        user = self.get_user_for_token(access_token)
+        if not user:
+            return None
 
-        is_user = self.validate_roles(user_roles)
-        is_admin = bool(self.admin_role and (self.admin_role in user_roles))
+        # atok = self.decode_jwt_token(access_token)
+        # if not atok:
+        #     self.log.error("No Access Token")
+        #     return
+        # # get user roles from access token
+        # user_roles = self.get_roles_from_token(atok)
+        # user_name = id_token.get('name', id_token.get(self.username_key))
 
-        if not is_user:
-            self.log.error("User %s not allowed", user_name)
-            return
+        # is_user = self.validate_roles(user_roles)
+        # is_admin = bool(self.admin_role and (self.admin_role in user_roles))
 
-        self.log.info('User {} is admin: {}'.format(user_name, is_admin))
+        # if not is_user:
+        #     self.log.error("User %s not allowed", user_name)
+        #     return
 
-        self.log.info('Token: %s', atok)
-
-        return {
-            # TODO: do I want a decoded access token? ... e.g.
-            'name': id_token.get(self.username_key),
-            'admin': is_admin,
-            'auth_state': {
-                'access_token': access_token,
-                'refresh_token': refresh_token,
-                # 'id_token': id_token,
-                'oauth_user': id_token,
-                'oauth_roles': list(user_roles),
-                'scope': scope,
-            }
+        self.log.info('User {name} is admin: {admin}'.format(**user))
+        # attach auth_state
+        user['auth_state'] = {
+            'access_token': access_token,
+            'refresh_token': refresh_token,
+            # 'id_token': id_token,
+            'oauth_user': id_token,
+            # 'oauth_roles': list(user_roles),
+            'scope': scope,
         }
+        return user
